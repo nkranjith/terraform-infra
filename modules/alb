@@ -1,1 +1,110 @@
+# 1. Spin up the GitHub/Registry ALB Module
+module "alb" {
+  source  = "terraform-aws-modules/alb/aws"
+  version = "~> 9.0"
+
+  name    = "production-ingress-alb"
+  vpc_id  = module.vpc.vpc_id
+  subnets = module.vpc.public_subnets # Public subnets for entry point
+
+  # Security Group Ingress / Egress Rules
+  security_group_ingress_rules = {
+    all_http = {
+      from_port   = 80
+      to_port     = 80
+      protocol    = "tcp"
+      description = "Allow plain HTTP web traffic"
+      cidr_blocks = ["0.0.0.0/0"]
+    }
+    all_https = {
+      from_port   = 443
+      to_port     = 443
+      protocol    = "tcp"
+      description = "Allow encrypted HTTPS web traffic"
+      cidr_blocks = ["0.0.0.0/0"]
+    }
+  }
+
+  security_group_egress_rules = {
+    all_traffic = {
+      from_port   = 0
+      to_port     = 0
+      protocol    = "-1"
+      description = "Allow ALB to route out to any backend target"
+      cidr_blocks = ["0.0.0.0/0"]
+    }
+  }
+
+  # Protocols & Listeners Configuration
+  listeners = {
+    # Listener 1: Automatically redirect HTTP port 80 requests to secure HTTPS
+    http-to-https-redirect = {
+      port     = 80
+      protocol = "HTTP"
+      redirect = {
+        port        = "443"
+        protocol    = "HTTPS"
+        status_code = "HTTP_301" # Permanent redirect
+      }
+    }
+
+    # Listener 2: Secure HTTPS port 443 entrypoint
+    https-secure = {
+      port            = 443
+      protocol        = "HTTPS"
+      ssl_policy      = "ELBSecurityPolicy-TLS13-1-2-2021-06" # Modern TLS strict guidelines
+      certificate_arn = var.acm_certificate_arn # Link your custom domain SSL cert here
+
+      # Forward traffic arriving on HTTPS to your backend app targets
+      forward = {
+        target_group_key = "app-backend-cluster"
+      }
+    }
+  }
+
+  # Target Groups mapping the ALB to your actual compute layers
+  target_groups = {
+    app-backend-cluster = {
+      backend_protocol                  = "HTTP"
+      backend_port                      = 80
+      target_type                       = "ip" # Use "ip" for ECS Fargate / "instance" for EC2
+      deregistration_delay              = 15
+      load_balancing_algorithm_type     = "round_robin"
+      
+      # Proactive micro-health probing parameters
+      health_check = {
+        path                = "/healthz" # Ensure your app responds with 200 OK here
+        port                = "traffic-port"
+        protocol            = "HTTP"
+        healthy_threshold   = 2
+        unhealthy_threshold = 3
+        interval            = 15
+        timeout             = 4
+      }
+    }
+  }
+
+  tags = {
+    Terraform   = "true"
+    Environment = "prod"
+  }
+}
+
+# Variable configuration for the SSL certificate
+variable "acm_certificate_arn" {
+  description = "The ARN of the AWS Certificate Manager SSL certificate for HTTPS"
+  type        = string
+  default     = "arn:aws:acm:us-east-1:123456789012:certificate/vaild-uuid-string"
+}
+
+# Capture the entry DNS endpoints
+output "alb_dns_name" {
+  description = "The public internet-facing DNS name of the ALB"
+  value       = module.alb.dns_name
+}
+
+output "alb_target_group_arn" {
+  description = "The ARN of the target group to supply into your ECS/EC2 script files"
+  value       = module.alb.target_groups["app-backend-cluster"].arn
+}
 
