@@ -1,1 +1,56 @@
+# Call the GitHub/Registry ECR Module
+module "ecr" {
+  source  = "terraform-aws-modules/ecr/aws"
+  version = "~> 2.0"
+
+  repository_name = "production-app-repo"
+
+  # Production Guardrails
+  repository_image_tag_mutability = "MUTABLE" # Set to IMMUTABLE if you want to prevent tag overwrites (e.g., overriding 'latest')
+  repository_image_scanning_configuration = {
+    scan_on_push = true # Automatically runs AWS Inspector vulnerability scans on every push
+  }
+
+  # Lifecycle Policy: Automatically cleans up old images to optimize storage costs
+  repository_lifecycle_policy = jsonencode({
+    rules = [
+      {
+        rulePriority = 1
+        description  = "Keep last 14 untagged images"
+        selection = {
+          tagStatus   = "untagged"
+          countType   = "imageCountMoreThan"
+          countNumber = 14
+        }
+        action = {
+          type = "expire"
+        }
+      },
+      {
+        rulePriority = 2
+        description  = "Keep last 30 release images matching 'v*' pattern"
+        selection = {
+          tagStatus     = "tagged"
+          tagPrefixList = ["v"]
+          countType     = "imageCountMoreThan"
+          countNumber   = 30
+        }
+        action = {
+          type = "expire"
+        }
+      }
+    ]
+  })
+
+  tags = {
+    Terraform   = "true"
+    Environment = "prod"
+  }
+}
+
+# Output the registry URL for your CI/CD pipelines
+output "repository_url" {
+  description = "The URL of the ECR repository"
+  value       = module.ecr.repository_url
+}
 
